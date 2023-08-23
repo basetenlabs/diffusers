@@ -669,6 +669,7 @@ class StableDiffusionXLImg2ImgPipeline(DiffusionPipeline, FromSingleFileMixin, L
         denoising_start: Optional[float] = None,
         denoising_end: Optional[float] = None,
         guidance_scale: float = 5.0,
+        end_cfg: Optional[float] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_2: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
@@ -954,6 +955,14 @@ class StableDiffusionXLImg2ImgPipeline(DiffusionPipeline, FromSingleFileMixin, L
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+
+                # end_cfg is the fraction of the total number of inference steps at which we stop using classifier free guidance
+                if end_cfg is not None and i / num_inference_steps > end_cfg and do_classifier_free_guidance:
+                    do_classifier_free_guidance = False
+                    prompt_embeds = torch.chunk(prompt_embeds, 2, dim=0)[-1]
+                    add_text_embeds = torch.chunk(add_text_embeds, 2, dim=0)[-1]
+                    add_time_ids = torch.chunk(add_time_ids, 2, dim=0)[-1]
+                    
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
 
