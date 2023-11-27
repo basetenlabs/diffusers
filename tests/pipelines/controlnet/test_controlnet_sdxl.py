@@ -24,6 +24,7 @@ from diffusers import (
     AutoencoderKL,
     ControlNetModel,
     EulerDiscreteScheduler,
+    LCMScheduler,
     StableDiffusionXLControlNetPipeline,
     UNet2DConditionModel,
 )
@@ -42,6 +43,7 @@ from ..test_pipelines_common import (
     PipelineKarrasSchedulerTesterMixin,
     PipelineLatentTesterMixin,
     PipelineTesterMixin,
+    SDXLOptionalComponentsTesterMixin,
 )
 
 
@@ -49,7 +51,11 @@ enable_full_determinism()
 
 
 class StableDiffusionXLControlNetPipelineFastTests(
-    PipelineLatentTesterMixin, PipelineKarrasSchedulerTesterMixin, PipelineTesterMixin, unittest.TestCase
+    PipelineLatentTesterMixin,
+    PipelineKarrasSchedulerTesterMixin,
+    PipelineTesterMixin,
+    SDXLOptionalComponentsTesterMixin,
+    unittest.TestCase,
 ):
     pipeline_class = StableDiffusionXLControlNetPipeline
     params = TEXT_TO_IMAGE_PARAMS
@@ -57,7 +63,7 @@ class StableDiffusionXLControlNetPipelineFastTests(
     image_params = IMAGE_TO_IMAGE_IMAGE_PARAMS
     image_latents_params = TEXT_TO_IMAGE_IMAGE_PARAMS
 
-    def get_dummy_components(self):
+    def get_dummy_components(self, time_cond_proj_dim=None):
         torch.manual_seed(0)
         unet = UNet2DConditionModel(
             block_out_channels=(32, 64),
@@ -75,6 +81,7 @@ class StableDiffusionXLControlNetPipelineFastTests(
             transformer_layers_per_block=(1, 2),
             projection_class_embeddings_input_dim=80,  # 6 * 8 + 32
             cross_attention_dim=64,
+            time_cond_proj_dim=time_cond_proj_dim,
         )
         torch.manual_seed(0)
         controlnet = ControlNetModel(
@@ -139,6 +146,8 @@ class StableDiffusionXLControlNetPipelineFastTests(
             "tokenizer": tokenizer,
             "text_encoder_2": text_encoder_2,
             "tokenizer_2": tokenizer_2,
+            "feature_extractor": None,
+            "image_encoder": None,
         }
         return components
 
@@ -178,6 +187,9 @@ class StableDiffusionXLControlNetPipelineFastTests(
 
     def test_inference_batch_single_identical(self):
         self._test_inference_batch_single_identical(expected_max_diff=2e-3)
+
+    def test_save_load_optional_components(self):
+        self._test_save_load_optional_components()
 
     @require_torch_gpu
     def test_stable_diffusion_xl_offloads(self):
@@ -322,9 +334,29 @@ class StableDiffusionXLControlNetPipelineFastTests(
         # make sure that it's equal
         assert np.abs(image_slice.flatten() - expected_slice).max() < 1e-4
 
+    def test_controlnet_sdxl_lcm(self):
+        device = "cpu"  # ensure determinism for the device-dependent torch.Generator
+
+        components = self.get_dummy_components(time_cond_proj_dim=256)
+        sd_pipe = StableDiffusionXLControlNetPipeline(**components)
+        sd_pipe.scheduler = LCMScheduler.from_config(sd_pipe.scheduler.config)
+        sd_pipe = sd_pipe.to(torch_device)
+        sd_pipe.set_progress_bar_config(disable=None)
+
+        inputs = self.get_dummy_inputs(device)
+        output = sd_pipe(**inputs)
+        image = output.images
+
+        image_slice = image[0, -3:, -3:, -1]
+
+        assert image.shape == (1, 64, 64, 3)
+        expected_slice = np.array([0.7799, 0.614, 0.6162, 0.7082, 0.6662, 0.5833, 0.4148, 0.5182, 0.4866])
+
+        assert np.abs(image_slice.flatten() - expected_slice).max() < 1e-2
+
 
 class StableDiffusionXLMultiControlNetPipelineFastTests(
-    PipelineTesterMixin, PipelineKarrasSchedulerTesterMixin, unittest.TestCase
+    PipelineTesterMixin, PipelineKarrasSchedulerTesterMixin, SDXLOptionalComponentsTesterMixin, unittest.TestCase
 ):
     pipeline_class = StableDiffusionXLControlNetPipeline
     params = TEXT_TO_IMAGE_PARAMS
@@ -441,6 +473,8 @@ class StableDiffusionXLMultiControlNetPipelineFastTests(
             "tokenizer": tokenizer,
             "text_encoder_2": text_encoder_2,
             "tokenizer_2": tokenizer_2,
+            "feature_extractor": None,
+            "image_encoder": None,
         }
         return components
 
@@ -470,7 +504,7 @@ class StableDiffusionXLMultiControlNetPipelineFastTests(
             "generator": generator,
             "num_inference_steps": 2,
             "guidance_scale": 6.0,
-            "output_type": "numpy",
+            "output_type": "np",
             "image": images,
         }
 
@@ -522,9 +556,12 @@ class StableDiffusionXLMultiControlNetPipelineFastTests(
     def test_inference_batch_single_identical(self):
         self._test_inference_batch_single_identical(expected_max_diff=2e-3)
 
+    def test_save_load_optional_components(self):
+        return self._test_save_load_optional_components()
+
 
 class StableDiffusionXLMultiControlNetOneModelPipelineFastTests(
-    PipelineKarrasSchedulerTesterMixin, PipelineTesterMixin, unittest.TestCase
+    PipelineKarrasSchedulerTesterMixin, PipelineTesterMixin, SDXLOptionalComponentsTesterMixin, unittest.TestCase
 ):
     pipeline_class = StableDiffusionXLControlNetPipeline
     params = TEXT_TO_IMAGE_PARAMS
@@ -623,6 +660,8 @@ class StableDiffusionXLMultiControlNetOneModelPipelineFastTests(
             "tokenizer": tokenizer,
             "text_encoder_2": text_encoder_2,
             "tokenizer_2": tokenizer_2,
+            "feature_extractor": None,
+            "image_encoder": None,
         }
         return components
 
@@ -646,7 +685,7 @@ class StableDiffusionXLMultiControlNetOneModelPipelineFastTests(
             "generator": generator,
             "num_inference_steps": 2,
             "guidance_scale": 6.0,
-            "output_type": "numpy",
+            "output_type": "np",
             "image": images,
         }
 
@@ -701,6 +740,9 @@ class StableDiffusionXLMultiControlNetOneModelPipelineFastTests(
 
     def test_inference_batch_single_identical(self):
         self._test_inference_batch_single_identical(expected_max_diff=2e-3)
+
+    def test_save_load_optional_components(self):
+        self._test_save_load_optional_components()
 
     def test_negative_conditions(self):
         components = self.get_dummy_components()
